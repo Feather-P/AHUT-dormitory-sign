@@ -6,6 +6,7 @@ import time
 import base64
 from urllib.parse import urlparse
 from datetime import date
+import random
 
 # 登录API端点
 LOGIN_URL: str = "https://xskq.ahut.edu.cn/api/flySource-auth/oauth/token"
@@ -183,6 +184,7 @@ def login(tenant_id: str, username: str, password: str) -> bool:
             "token_type": json_data.get("token_type", "bearer"),
             "expires_in": json_data.get("expires_in", ""),
             "created_at": str(int(time.time())),
+            "user_id": json_data.get("userId", ""),
         }
         
         os.makedirs(os.path.dirname(TOKEN_PATH), exist_ok=True)
@@ -270,6 +272,9 @@ def get_task_info(access_token: str, task_id: str, sign_date:str):
 
 def send_sign_request(access_token: str, task_dict: dict) -> bool:
     """发送签到请求"""
+
+    send_log(access_token=access_token)
+    
     from datetime import datetime
     
     current_time = datetime.now().time()
@@ -280,20 +285,44 @@ def send_sign_request(access_token: str, task_dict: dict) -> bool:
     if sign_start_time <= current_time <= sign_end_time:
         print(f"当前时间在签到时间范围内({sign_start_time}-{sign_end_time})，开始签到...")
         
+
+        timestamp = time.time()
+        local_time = time.localtime(timestamp)
+        formatted_time = time.strftime('%H:%M:%S', local_time)
+
+        today = date.today()
+        weekday = today.weekday()
+        chinese_weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+        chinese_weekday = chinese_weekdays[weekday]
+
         # 构建请求参数
-        params: dict[str, str] = {
-            "taskId": task_dict.get("task_id", ""),
+        params: dict = {
+            "fileId": "",
+            "imgBase64": "/static/images/dormitory/photo.png",
+            "locationAccuracy": round(random.uniform(1.0, 25.0), 1),
             "roomId": task_dict.get("roomId", ""),
-            "locationLat": task_dict.get("locationLat", ""),
-            "locationLng": task_dict.get("locationLng", ""),
-            "signDate": str(date.today())
+            "scanCode": "",
+            "scanType": "",
+            "signAddress": "",
+            "signDate": str(date.today()),
+            "signLat": round(random.uniform(float(task_dict.get("locationLat", "0")) - 0.00002, float(task_dict.get("locationLat", "0")) + 0.00002), 5),
+            "signLng": round(random.uniform(float(task_dict.get("locationLng", "0")) - 0.00002, float(task_dict.get("locationLng", "0")) + 0.00002), 5),
+            "signTime": formatted_time,
+            "signType": 0,
+            "signWeek": chinese_weekday,
+            "taskId": task_dict.get("task_id", ""),
         }
+        
+        # 调试消息：打印请求参数
+        print(f"调试信息 - 请求参数: {json.dumps(params, indent=2, ensure_ascii=False)}")
         
         # 构建请求头
         headers: dict[str, str] = {
             "Authorization": AUTHORIZATION,
+            "Content-Type": "application/json;charset=UTF-8",
             "Origin": "https://xskq.ahut.edu.cn",
-            "Referer": "https://xskq.ahut.edu.cn/wise/pages/ssgl/wqqd",
+            "Priority": "u=1, i",
+            "Referer": "https://xskq.ahut.edu.cn/wise/pages/ssgl/dormsign?taskId="+task_dict.get("task_id", "") + "&autoSign=1&scanSign=0&userId="+task_dict.get("user_id", ""),
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3",
             "Cookie": "access-token=" + access_token,
             "FlySource-Auth": "bearer " + access_token,
@@ -301,7 +330,7 @@ def send_sign_request(access_token: str, task_dict: dict) -> bool:
         }
         
         try:
-            response = requests.post(url=SIGN_API, params=params, headers=headers)
+            response = requests.post(url=SIGN_API, json=params, headers=headers)
             response_dict = response.json()
             
             if response.status_code == 200 and response_dict.get("code") == 200:
@@ -332,6 +361,10 @@ def select_task(max: int) -> int:
 def save_payload(access_token: str, task_id: str):
 
     task_info = get_task_info(access_token=access_token, task_id=task_id, sign_date=str(date.today()))
+    # 从token中获取user_id
+    token_dict = read_token()
+    user_id = token_dict.get("user_id", "")
+    
     # 构建payload dict
     payload_dict: dict = {
         "task_id": task_id,
@@ -342,7 +375,8 @@ def save_payload(access_token: str, task_id: str):
         "signEndTime": task_info["signEndTime"],
         "roomId": task_info["dormitoryRegisterVO"]["roomId"],
         "locationLat": task_info["dormitoryRegisterVO"]["locationLat"],
-        "locationLng": task_info["dormitoryRegisterVO"]["locationLng"]
+        "locationLng": task_info["dormitoryRegisterVO"]["locationLng"],
+        "user_id": user_id
     }
 
     os.makedirs(os.path.dirname(TASK_PATH), exist_ok=True)
