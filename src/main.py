@@ -4,7 +4,7 @@ import hashlib
 import os
 import time
 import base64
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 from datetime import date
 import random
 
@@ -16,6 +16,8 @@ DORM_LIST_URL: str = "https://xskq.ahut.edu.cn/api/flySource-yxgl/dormSignTask/g
 LOG_URL: str = "https://xskq.ahut.edu.cn/api/flySource-base/apiLog/save"
 # 任务详情获取API端点
 GET_TASK_URL: str = "https://xskq.ahut.edu.cn/api/flySource-yxgl/dormSignTask/getTaskByIdForApp"
+# 微信认证API端点
+WECHAT_URL: str = "https://xskq.ahut.edu.cn/api/flySource-base/wechat/getWechatMpConfig"
 # 这个AUTHORIZATION是请求头中的一个不知道是什么，疑似是固定的，先硬编码写着了
 AUTHORIZATION: str = "Basic Zmx5U291cmNlOkZseVNvdXJjZV9TREVLT0ZTSURGODIzMjlGOHNkODcyM2RTODdEQVM="
 # 签到API
@@ -250,6 +252,31 @@ def get_dorm_list(access_token: str):
     records = response_dict["data"]["records"]
     return records
 
+def verify_wechat(access_token: str, task_id: str, user_id: str):
+    """获取微信认证配置"""
+    # 构建configUrl参数
+    config_url = WECHAT_URL + f"?taskId={task_id}&autoSign=1&scanSign=0&userId={user_id}"
+    
+    encoded_config_url = quote(config_url, safe='')
+    
+    params: dict[str, str] = {
+        "configUrl": encoded_config_url
+    }
+
+    headers: dict[str, str] = {
+        "Authorization": AUTHORIZATION,
+        "Origin": "https://xskq.ahut.edu.cn",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3",
+        "Cookie": "access-token=" + access_token,
+        "FlySource-Auth": "bearer "+ access_token,
+        "FlySource-sign": generate_flysource_sign(WECHAT_URL, access_token)
+    }
+
+    response = requests.get(url=WECHAT_URL, params=params, headers=headers)
+    response_dict = response.json()
+    return response_dict["data"]
+
+
 def get_task_info(access_token: str, task_id: str, sign_date:str):
 
     params: dict[str, str] = {
@@ -274,6 +301,20 @@ def send_sign_request(access_token: str, task_dict: dict) -> bool:
     """发送签到请求"""
 
     send_log(access_token=access_token)
+    
+    # 在正式签到之前先调用微信认证
+    task_id = task_dict.get("task_id", "")
+    user_id = task_dict.get("user_id", "")
+    if task_id and user_id:
+        try:
+            verify_wechat(access_token=access_token, task_id=task_id, user_id=user_id)
+            print("微信认证成功")
+        except Exception as e:
+            print(f"微信认证失败: {e}")
+            return False
+    else:
+        print("任务ID或用户ID缺失，无法进行微信认证")
+        return False
     
     from datetime import datetime
     
@@ -312,9 +353,6 @@ def send_sign_request(access_token: str, task_dict: dict) -> bool:
             "signWeek": chinese_weekday,
             "taskId": task_dict.get("task_id", ""),
         }
-        
-        # 调试消息：打印请求参数
-        print(f"调试信息 - 请求参数: {json.dumps(params, indent=2, ensure_ascii=False)}")
         
         # 构建请求头
         headers: dict[str, str] = {
